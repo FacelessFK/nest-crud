@@ -2,20 +2,35 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { User } from './schema/user.entity';
 import { InjectRepository } from '@nestjs/typeorm';
-import { hashPassword } from 'src/common/hash-password';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class UsersService {
-  constructor(@InjectRepository(User) private userRepo: Repository<User>) {}
+  constructor(
+    @InjectRepository(User) private userRepo: Repository<User>,
+    private jwtService: JwtService,
+    private configService: ConfigService,
+  ) {}
 
   async create(firstName: string, email: string, password: string) {
-    const hashedPassword = await hashPassword(password);
     const user = this.userRepo.create({
       firstName,
       email,
-      password: hashedPassword,
+      password,
     });
-    return this.userRepo.save(user);
+
+    const { accessToken, refreshToken } = await this.getTokens(
+      user.id,
+      user.email,
+    );
+
+    const newUser = await this.userRepo.save({ ...user, refreshToken });
+    return {
+      firstName: newUser.firstName,
+      email: newUser.email,
+      accessToken,
+    };
   }
 
   findOne(id: string) {
@@ -29,7 +44,9 @@ export class UsersService {
   async update(id: string, attrs: Partial<User>) {
     const user = await this.findOne(id);
     if (!user) throw new NotFoundException('User not found');
-    Object.assign(user, attrs);
+    const tokens = await this.getTokens(user.id, user.email);
+    // Update the refresh token directly
+    Object.assign(user, { ...attrs, refreshToken: tokens.refreshToken });
     return this.userRepo.save(user);
   }
 
@@ -37,5 +54,33 @@ export class UsersService {
     const user = await this.findOne(id);
     if (!user) throw new NotFoundException('User not found');
     return this.userRepo.remove(user);
+  }
+  async getTokens(userId: string, email: string) {
+    const [accessToken, refreshToken] = await Promise.all([
+      this.jwtService.signAsync(
+        {
+          id: userId,
+          email,
+        },
+        {
+          secret: this.configService.get<string>('JWT_ACCESS_SECRET'),
+          expiresIn: '2h',
+        },
+      ),
+      this.jwtService.signAsync(
+        {
+          id: userId,
+          email,
+        },
+        {
+          secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+          expiresIn: '7d',
+        },
+      ),
+    ]);
+    return {
+      accessToken,
+      refreshToken,
+    };
   }
 }

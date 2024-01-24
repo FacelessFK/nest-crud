@@ -5,4 +5,8 @@ export class UserDto {
   id: number;
   @Expose()
   email: string;
+  @Expose()
+  accessToken;
+  @Expose()
+  refreshToken;
 }
